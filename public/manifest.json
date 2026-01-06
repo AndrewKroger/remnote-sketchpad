@@ -1,0 +1,22 @@
+{
+  "manifestVersion": 1,
+  "id": "remnote_sketchpad",
+  "name": "Sketchpad",
+  "author": "andrewkroger",
+  "repoUrl": "https://github.com/yourusername/remnote-sketchpad",
+  "version": {
+    "major": 0,
+    "minor": 1,
+    "patch": 0
+  },
+  "theme": [],
+  "enableOnMobile": true,
+  "description": "A sketchpad widget for drawing and saving sketches to Rems",
+  "requestNative": false,
+  "requiredScopes": [
+    {
+      "type": "All",
+      "level": "ReadCreateModify"
+    }
+  ]
+}
