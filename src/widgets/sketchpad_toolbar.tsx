@@ -1,7 +1,11 @@
-import { usePlugin, renderWidget, useRunAsync } from '@remnote/plugin-sdk';
+import { usePlugin, renderWidget, useRunAsync, useSessionStorageState } from '@remnote/plugin-sdk';
 import { useCallback } from 'react';
 
 const SETTING_MODE = 'sketchpad-mode';
+const SETTING_DISPLAY = 'sketchpad-display';
+
+// Export for use by sketchpad_flashcard
+export const INLINE_TOGGLE_KEY = 'sketchpad-inline-visible';
 
 const styles = {
   button: {
@@ -18,45 +22,95 @@ const styles = {
     transition: 'all 0.15s ease',
     color: 'var(--rn-clr-content-primary, #1e293b)',
   },
+  buttonActive: {
+    backgroundColor: 'var(--rn-clr-background-accent, #3b82f6)',
+  },
 };
 
 export const SketchpadToolbar = () => {
   const plugin = usePlugin();
 
-  // Check if we're in floating mode
+  // Check activation mode (button vs tag)
   const mode = useRunAsync(
     () => plugin.settings.getSetting<string>(SETTING_MODE),
     []
   );
 
-  const openSketchpad = useCallback(async () => {
-    // Check if on mobile (iOS/Android) - use Pane to properly displace content
-    const os = await plugin.app.getOperatingSystem();
-    const isMobile = os === 'ios' || os === 'android';
-    
-    if (isMobile) {
-      // Pane widget properly displaces content on mobile instead of floating
-      await plugin.window.openWidgetInPane('sketchpad');
-    } else {
-      await plugin.window.openWidgetInRightSidebar('sketchpad');
-    }
-  }, [plugin]);
+  // Check display type
+  const displayType = useRunAsync(
+    () => plugin.settings.getSetting<string>(SETTING_DISPLAY),
+    []
+  );
 
-  // Only show button in floating mode
-  if (mode !== 'floating') {
+  // For inline toggle mode - track visibility state
+  const [inlineVisible, setInlineVisible] = useSessionStorageState<boolean>(INLINE_TOGGLE_KEY, false);
+
+  const openSketchpad = useCallback(async () => {
+    const display = displayType || 'sidebar';
+
+    switch (display) {
+      case 'sidebar':
+        // Open in right sidebar
+        await plugin.window.openWidgetInRightSidebar('sketchpad');
+        break;
+      
+      case 'left-sidebar':
+        // Open in left sidebar (might behave differently on mobile)
+        // Note: SDK doesn't have openWidgetInLeftSidebar, so we use a command workaround
+        // For now, fall back to right sidebar with a note
+        await plugin.window.openWidgetInRightSidebar('sketchpad');
+        break;
+      
+      case 'pane':
+        // Open as a separate pane (side-by-side)
+        await plugin.window.openWidgetInPane('sketchpad');
+        break;
+      
+      case 'floating':
+        // Open as floating window on the right side
+        await plugin.window.openFloatingWidget('sketchpad_floating', {
+          top: 100,
+          right: 20,
+        });
+        break;
+      
+      case 'inline':
+      case 'extra-detail':
+      case 'below-toolbar':
+        // Toggle inline visibility (FlashcardUnder/ExtraDetail/QueueBelowTopBar widgets will react to this)
+        setInlineVisible(!inlineVisible);
+        break;
+      
+      default:
+        await plugin.window.openWidgetInRightSidebar('sketchpad');
+    }
+  }, [plugin, displayType, inlineVisible, setInlineVisible]);
+
+  // Only show button in button mode (not tag mode)
+  if (mode !== 'button') {
     return null;
   }
 
+  const isInlineMode = displayType === 'inline' || displayType === 'extra-detail' || displayType === 'below-toolbar';
+  const isActive = isInlineMode && inlineVisible;
+
   return (
     <button
-      style={styles.button}
+      style={{
+        ...styles.button,
+        ...(isActive ? styles.buttonActive : {}),
+      }}
       onClick={openSketchpad}
       title="Open Sketchpad"
       onMouseOver={(e) => {
-        e.currentTarget.style.backgroundColor = 'var(--rn-clr-background-secondary, #f1f5f9)';
+        if (!isActive) {
+          e.currentTarget.style.backgroundColor = 'var(--rn-clr-background-secondary, #f1f5f9)';
+        }
       }}
       onMouseOut={(e) => {
-        e.currentTarget.style.backgroundColor = 'transparent';
+        if (!isActive) {
+          e.currentTarget.style.backgroundColor = 'transparent';
+        }
       }}
     >
       ✏️

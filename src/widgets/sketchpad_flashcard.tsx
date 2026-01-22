@@ -1,4 +1,4 @@
-import { usePlugin, renderWidget, useRunAsync } from '@remnote/plugin-sdk';
+import { usePlugin, renderWidget, useRunAsync, useSessionStorageState } from '@remnote/plugin-sdk';
 import { useRef, useState, useEffect, useCallback } from 'react';
 
 interface Point {
@@ -8,6 +8,10 @@ interface Point {
 }
 
 type Tool = 'pen' | 'eraser';
+
+const SETTING_MODE = 'sketchpad-mode';
+const SETTING_DISPLAY = 'sketchpad-display';
+const INLINE_TOGGLE_KEY = 'sketchpad-inline-visible';
 
 const COLORS = ['#000000', '#e53e3e', '#dd6b20', '#d69e2e', '#38a169', '#3182ce', '#805ad5'];
 
@@ -111,17 +115,19 @@ export const SketchpadWidget = () => {
   const [color, setColor] = useState('#000000');
   const [isDrawing, setIsDrawing] = useState(false);
 
-  const SETTING_MODE = 'sketchpad-mode';
+  // For inline toggle mode - track visibility state
+  const [inlineVisible] = useSessionStorageState<boolean>(INLINE_TOGGLE_KEY, false);
 
-  // Check mode setting and if the current card has "sketch" tag
-  const shouldShow = useRunAsync(async () => {
+  // Check mode setting and display type
+  const modeAndDisplay = useRunAsync(async () => {
+    const mode = await plugin.settings.getSetting<string>(SETTING_MODE);
+    const display = await plugin.settings.getSetting<string>(SETTING_DISPLAY);
+    return { mode, display };
+  }, []);
+
+  // Check if the current card has "sketch" tag (for tag mode)
+  const hasSketchTag = useRunAsync(async () => {
     try {
-      // First check mode setting
-      const mode = await plugin.settings.getSetting<string>(SETTING_MODE);
-      if (mode !== 'tag') {
-        return false; // Only show in tag mode
-      }
-
       // Get the current card from the queue
       const currentCard = await plugin.queue.getCurrentCard();
       if (!currentCard) {
@@ -150,6 +156,39 @@ export const SketchpadWidget = () => {
       return false;
     }
   }, []);
+
+  // Get the widget context to know which location we're rendering in
+  const widgetContext = useRunAsync(() => plugin.widget.getWidgetContext(), []);
+
+  // Determine if we should show based on mode, settings, and widget location
+  const shouldShow = (() => {
+    if (!modeAndDisplay) return false;
+    
+    const { mode, display } = modeAndDisplay;
+    
+    // Tag mode: show if card has sketch tag (only in FlashcardUnder location)
+    if (mode === 'tag' && hasSketchTag === true) {
+      return true;
+    }
+    
+    // Button mode with inline displays: show if toggle is active AND we're in the right location
+    if (mode === 'button' && inlineVisible) {
+      // Check which widget location we're in and match it to the display setting
+      const location = widgetContext?.widgetLocation;
+      
+      if (display === 'inline' && location === 'FlashcardUnder') {
+        return true;
+      }
+      if (display === 'extra-detail' && location === 'FlashcardExtraDetail') {
+        return true;
+      }
+      if (display === 'below-toolbar' && location === 'QueueBelowTopBar') {
+        return true;
+      }
+    }
+    
+    return false;
+  })();
 
   // Get point from pointer event
   const getPoint = useCallback((e: React.PointerEvent<HTMLCanvasElement>): Point => {

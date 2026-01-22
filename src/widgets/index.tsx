@@ -4,38 +4,63 @@ import '../index.css';
 
 // Setting IDs
 const SETTING_MODE = 'sketchpad-mode';
+const SETTING_DISPLAY = 'sketchpad-display';
 
 async function onActivate(plugin: ReactRNPlugin) {
   console.log('[Sketchpad] Plugin activating...');
 
-  // Register mode setting
+  // Register mode setting (button vs tag)
   await plugin.settings.registerDropdownSetting({
     id: SETTING_MODE,
-    title: 'Sketchpad Mode',
-    description: 'Choose how the sketchpad appears during flashcard review',
-    defaultValue: 'floating',
+    title: 'Activation Mode',
+    description: 'How the sketchpad is activated during flashcard review',
+    defaultValue: 'button',
     options: [
-      { key: '1', label: 'Floating Sidebar (toggle with button)', value: 'floating' },
-      { key: '2', label: 'Tag Mode (appears under cards tagged "sketch")', value: 'tag' },
+      { key: '1', label: 'Button (click pencil icon to open)', value: 'button' },
+      { key: '2', label: 'Tag Mode (auto-show under cards tagged "sketch")', value: 'tag' },
     ],
   });
 
-  // Always register the right sidebar widget (for non-review use)
+  // Register display type setting (how sketchpad appears when opened)
+  await plugin.settings.registerDropdownSetting({
+    id: SETTING_DISPLAY,
+    title: 'Display Type (for Button Mode)',
+    description: 'How the sketchpad appears when you click the pencil button. Try different options to find what works best on your device.',
+    defaultValue: 'sidebar',
+    options: [
+      { key: '1', label: 'Right Sidebar - Opens in right sidebar', value: 'sidebar' },
+      { key: '2', label: 'Left Sidebar - Opens in left sidebar', value: 'left-sidebar' },
+      { key: '3', label: 'Split Pane - Opens as side-by-side pane', value: 'pane' },
+      { key: '4', label: 'Floating Window - Opens as popup window', value: 'floating' },
+      { key: '5', label: 'Inline Under Card - Shows/hides under flashcard', value: 'inline' },
+      { key: '6', label: 'Inline Extra Detail - Shows in card extra detail area', value: 'extra-detail' },
+      { key: '7', label: 'Below Queue Toolbar - Shows below the queue top bar', value: 'below-toolbar' },
+    ],
+  });
+
   // Using SVG data URL for pencil icon since emojis don't work
   const pencilIconSvg = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>')}`;
   
+  // Register for Right Sidebar
   await plugin.app.registerWidget('sketchpad', WidgetLocation.RightSidebar, {
     dimensions: { height: 'auto', width: '100%' },
     widgetTabTitle: 'Sketchpad',
     widgetTabIcon: pencilIconSvg,
   });
 
-  // Also register as a Pane widget for mobile (displaces content properly)
+  // Register for Left Sidebar
+  await plugin.app.registerWidget('sketchpad', WidgetLocation.LeftSidebar, {
+    dimensions: { height: 'auto', width: '100%' },
+    widgetTabTitle: 'Sketchpad',
+    widgetTabIcon: pencilIconSvg,
+  });
+
+  // Register as a Pane widget (for split pane mode)
   await plugin.app.registerWidget('sketchpad', WidgetLocation.Pane, {
     dimensions: { height: 'auto', width: '100%' },
   });
 
-  // Register the floating widget
+  // Register the floating widget (for floating window mode)
   await plugin.app.registerWidget('sketchpad_floating', WidgetLocation.FloatingWidget, {
     dimensions: { height: 'auto', width: 400 },
   });
@@ -45,8 +70,18 @@ async function onActivate(plugin: ReactRNPlugin) {
     dimensions: { height: 'auto', width: 'auto' },
   });
 
-  // Register tag-mode widget (FlashcardUnder) - only shows if setting is 'tag'
+  // Register under flashcard (for tag mode AND inline toggle mode)
   await plugin.app.registerWidget('sketchpad_flashcard', WidgetLocation.FlashcardUnder, {
+    dimensions: { height: 'auto', width: '100%' },
+  });
+
+  // Register in FlashcardExtraDetail (alternative inline position)
+  await plugin.app.registerWidget('sketchpad_flashcard', WidgetLocation.FlashcardExtraDetail, {
+    dimensions: { height: 'auto', width: '100%' },
+  });
+
+  // Register below queue top bar
+  await plugin.app.registerWidget('sketchpad_flashcard', WidgetLocation.QueueBelowTopBar, {
     dimensions: { height: 'auto', width: '100%' },
   });
 
