@@ -30,8 +30,16 @@ export const SketchpadToolbar = () => {
   );
 
   const openSketchpad = useCallback(async () => {
-    // Open the sketchpad widget in the right sidebar
-    await plugin.window.openWidgetInRightSidebar('sketchpad');
+    // Check if on mobile (iOS/Android) - use Pane to properly displace content
+    const os = await plugin.app.getOperatingSystem();
+    const isMobile = os === 'ios' || os === 'android';
+    
+    if (isMobile) {
+      // Pane widget properly displaces content on mobile instead of floating
+      await plugin.window.openWidgetInPane('sketchpad');
+    } else {
+      await plugin.window.openWidgetInRightSidebar('sketchpad');
+    }
   }, [plugin]);
 
   // Only show button in floating mode

@@ -30,6 +30,11 @@ async function onActivate(plugin: ReactRNPlugin) {
     widgetTabIcon: pencilIconSvg,
   });
 
+  // Also register as a Pane widget for mobile (displaces content properly)
+  await plugin.app.registerWidget('sketchpad', WidgetLocation.Pane, {
+    dimensions: { height: 'auto', width: '100%' },
+  });
+
   // Register the floating widget
   await plugin.app.registerWidget('sketchpad_floating', WidgetLocation.FloatingWidget, {
     dimensions: { height: 'auto', width: 400 },
