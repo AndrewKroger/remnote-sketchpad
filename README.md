@@ -1,8 +1,6 @@
 # RemNote Sketchpad Plugin
 
-A sketchpad widget for RemNote that lets you draw sketches during flashcard review and save them directly to your cards.
-
-
+A sketchpad widget for RemNote that lets you draw sketches during flashcard review and save them directly to your cards. **Optimized for iPad and mobile devices.**
 
 ## Features
 
@@ -11,6 +9,7 @@ A sketchpad widget for RemNote that lets you draw sketches during flashcard revi
 - **Grid Background**: Faint grid lines for alignment
 - **Auto-Clear**: Canvas automatically clears when you move to the next flashcard
 - **Hint Mode**: Show the back-of-card image at 10% opacity as a tracing guide
+- **Mobile Optimized**: On iPad/iOS/Android, opens as a proper pane that displaces content instead of floating
 - **Two Modes**:
   - **Floating Sidebar**: Toggle sketchpad with toolbar button during flashcard review
   - **Tag Mode**: Sketchpad appears under cards tagged with "sketch"

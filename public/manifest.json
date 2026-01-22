@@ -7,11 +7,11 @@
   "version": {
     "major": 0,
     "minor": 1,
-    "patch": 0
+    "patch": 1
   },
   "theme": [],
   "enableOnMobile": true,
-  "description": "A sketchpad widget for drawing and saving sketches to Rems",
+  "description": "A sketchpad widget for drawing and saving sketches to Rems. Optimized for iPad and mobile with proper content displacement.",
   "requestNative": false,
   "requiredScopes": [
     {
