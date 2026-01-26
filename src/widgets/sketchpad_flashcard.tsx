@@ -23,6 +23,9 @@ const styles = {
     minHeight: '400px',
     backgroundColor: '#1a1a2e',
     fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+    userSelect: 'none' as const,
+    WebkitUserSelect: 'none' as const,
+    WebkitTouchCallout: 'none' as const,
   },
   toolbar: {
     display: 'flex',
@@ -183,6 +186,15 @@ export const SketchpadWidget = () => {
         return true;
       }
       if (display === 'below-toolbar' && location === 'QueueBelowTopBar') {
+        return true;
+      }
+      if (display === 'flashcard' && location === 'Flashcard') {
+        return true;
+      }
+      if (display === 'rem-popup-right' && location === 'RemReferencePopupRight') {
+        return true;
+      }
+      if (display === 'rem-popup-start' && location === 'RemReferencePopupStart') {
         return true;
       }
     }

@@ -35,6 +35,9 @@ async function onActivate(plugin: ReactRNPlugin) {
       { key: '5', label: 'Inline Under Card - Shows/hides under flashcard', value: 'inline' },
       { key: '6', label: 'Inline Extra Detail - Shows in card extra detail area', value: 'extra-detail' },
       { key: '7', label: 'Below Queue Toolbar - Shows below the queue top bar', value: 'below-toolbar' },
+      { key: '8', label: 'Inside Flashcard - Renders within the flashcard itself', value: 'flashcard' },
+      { key: '9', label: 'Rem Popup Right - Shows in rem reference popup (right)', value: 'rem-popup-right' },
+      { key: '10', label: 'Rem Popup Start - Shows in rem reference popup (start)', value: 'rem-popup-start' },
     ],
   });
 
@@ -82,6 +85,21 @@ async function onActivate(plugin: ReactRNPlugin) {
 
   // Register below queue top bar
   await plugin.app.registerWidget('sketchpad_flashcard', WidgetLocation.QueueBelowTopBar, {
+    dimensions: { height: 'auto', width: '100%' },
+  });
+
+  // Register inside the Flashcard itself
+  await plugin.app.registerWidget('sketchpad_flashcard', WidgetLocation.Flashcard, {
+    dimensions: { height: 'auto', width: '100%' },
+  });
+
+  // Register in rem reference popup (right side)
+  await plugin.app.registerWidget('sketchpad_flashcard', WidgetLocation.RemReferencePopupRight, {
+    dimensions: { height: 'auto', width: '100%' },
+  });
+
+  // Register in rem reference popup (start)
+  await plugin.app.registerWidget('sketchpad_flashcard', WidgetLocation.RemReferencePopupStart, {
     dimensions: { height: 'auto', width: '100%' },
   });
 

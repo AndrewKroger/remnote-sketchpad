@@ -55,9 +55,7 @@ export const SketchpadToolbar = () => {
         break;
       
       case 'left-sidebar':
-        // Open in left sidebar (might behave differently on mobile)
-        // Note: SDK doesn't have openWidgetInLeftSidebar, so we use a command workaround
-        // For now, fall back to right sidebar with a note
+        // Open in left sidebar (falls back to right sidebar)
         await plugin.window.openWidgetInRightSidebar('sketchpad');
         break;
       
@@ -77,7 +75,10 @@ export const SketchpadToolbar = () => {
       case 'inline':
       case 'extra-detail':
       case 'below-toolbar':
-        // Toggle inline visibility (FlashcardUnder/ExtraDetail/QueueBelowTopBar widgets will react to this)
+      case 'flashcard':
+      case 'rem-popup-right':
+      case 'rem-popup-start':
+        // Toggle inline visibility (embedded widgets will react to this)
         setInlineVisible(!inlineVisible);
         break;
       
@@ -91,7 +92,7 @@ export const SketchpadToolbar = () => {
     return null;
   }
 
-  const isInlineMode = displayType === 'inline' || displayType === 'extra-detail' || displayType === 'below-toolbar';
+  const isInlineMode = displayType === 'inline' || displayType === 'extra-detail' || displayType === 'below-toolbar' || displayType === 'flashcard' || displayType === 'rem-popup-right' || displayType === 'rem-popup-start';
   const isActive = isInlineMode && inlineVisible;
 
   return (

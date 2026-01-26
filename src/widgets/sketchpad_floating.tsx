@@ -25,6 +25,9 @@ const styles = {
     overflow: 'hidden',
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
     boxSizing: 'border-box' as const,
+    userSelect: 'none' as const,
+    WebkitUserSelect: 'none' as const,
+    WebkitTouchCallout: 'none' as const,
   },
   // Header bar
   header: {

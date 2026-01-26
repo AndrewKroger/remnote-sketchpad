@@ -20,6 +20,9 @@ const styles = {
     backgroundColor: 'var(--rn-clr-background-primary, #ffffff)',
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
     overflow: 'hidden',
+    userSelect: 'none' as const,
+    WebkitUserSelect: 'none' as const,
+    WebkitTouchCallout: 'none' as const,
   },
   // Compact toolbar
   toolbar: {
