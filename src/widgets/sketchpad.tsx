@@ -211,12 +211,6 @@ export const SketchpadWidget = () => {
   const [hintImageUrl, setHintImageUrl] = useState<string | null>(null);
   const [currentRemId, setCurrentRemId] = useState<string | null>(null);
   const [isHoldingEraserKey, setIsHoldingEraserKey] = useState(false);
-  
-  // Apple Pencil double-tap detection (screen double-tap with pen)
-  // Note: Hardware pencil barrel double-tap requires native iOS APIs not available in web
-  const lastPenTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
-  const DOUBLE_TAP_THRESHOLD = 300; // ms
-  const DOUBLE_TAP_DISTANCE = 20; // pixels
 
   // Load settings
   const eraserKey = useRunAsync(
@@ -486,29 +480,13 @@ export const SketchpadWidget = () => {
     e.preventDefault();
     e.stopPropagation();
     
+    // Palm rejection: only respond to pen (Apple Pencil), ignore touch
+    if (e.pointerType === 'touch') {
+      return; // Ignore palm/finger touches
+    }
+    
     const canvas = canvasRef.current;
     if (!canvas) return;
-
-    // Apple Pencil screen double-tap detection (quick double-tap in same area toggles tool)
-    if (e.pointerType === 'pen') {
-      const now = Date.now();
-      const point = getPoint(e);
-      
-      if (lastPenTapRef.current) {
-        const timeDiff = now - lastPenTapRef.current.time;
-        const dx = point.x - lastPenTapRef.current.x;
-        const dy = point.y - lastPenTapRef.current.y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-        
-        if (timeDiff < DOUBLE_TAP_THRESHOLD && distance < DOUBLE_TAP_DISTANCE) {
-          // Double tap detected - toggle between pen and eraser
-          setTool(prev => prev === 'pen' ? 'eraser' : 'pen');
-          lastPenTapRef.current = null; // Reset to prevent triple-tap
-          return; // Don't start drawing on double-tap
-        }
-      }
-      lastPenTapRef.current = { time: now, x: point.x, y: point.y };
-    }
 
     canvas.setPointerCapture(e.pointerId);
     const point = getPoint(e);
@@ -528,6 +506,9 @@ export const SketchpadWidget = () => {
   }, [getPoint, drawLine, activeTool, color]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    // Palm rejection: only respond to pen, ignore touch
+    if (e.pointerType === 'touch') return;
+    
     if (!isDrawing || !lastPointRef.current) return;
     e.preventDefault();
     e.stopPropagation();
@@ -564,16 +545,54 @@ export const SketchpadWidget = () => {
   }, [activeTool]);
 
   // Prevent context menu (iOS text selection menu)
-  const handleContextMenu = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+  const handleContextMenu = useCallback((e: React.MouseEvent | React.TouchEvent | Event) => {
     e.preventDefault();
     e.stopPropagation();
     return false;
   }, []);
 
-  // Prevent touch callout
+  // Prevent all touch-related menus and selection
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    // Don't prevent default for touch drawing, just stop propagation
     e.stopPropagation();
+    // Prevent iOS callout menu
+    if (e.touches.length > 1) {
+      e.preventDefault();
+    }
+  }, []);
+
+  // Prevent selection on long press
+  const handleSelectStart = useCallback((e: Event) => {
+    e.preventDefault();
+    return false;
+  }, []);
+
+  // Add document-level prevention when canvas is active
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    // Prevent context menu at document level when interacting with canvas
+    const preventContextMenu = (e: Event) => {
+      if (e.target === canvas || canvas.contains(e.target as Node)) {
+        e.preventDefault();
+        return false;
+      }
+    };
+
+    const preventSelect = (e: Event) => {
+      if (e.target === canvas || canvas.contains(e.target as Node)) {
+        e.preventDefault();
+        return false;
+      }
+    };
+
+    document.addEventListener('contextmenu', preventContextMenu, { capture: true });
+    document.addEventListener('selectstart', preventSelect, { capture: true });
+    
+    return () => {
+      document.removeEventListener('contextmenu', preventContextMenu, { capture: true });
+      document.removeEventListener('selectstart', preventSelect, { capture: true });
+    };
   }, []);
 
   const saveSketch = useCallback(async () => {
@@ -706,6 +725,8 @@ export const SketchpadWidget = () => {
           onPointerLeave={handlePointerUp}
           onPointerCancel={handlePointerUp}
           onContextMenu={handleContextMenu}
+          onTouchStart={handleTouchStart}
+          onSelect={handleSelectStart as any}
         />
       </div>
 
