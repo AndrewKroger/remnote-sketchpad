@@ -5,6 +5,8 @@ import '../index.css';
 // Setting IDs
 const SETTING_MODE = 'sketchpad-mode';
 const SETTING_DISPLAY = 'sketchpad-display';
+const SETTING_ERASER_KEY = 'sketchpad-eraser-key';
+const SETTING_DEFAULT_ERASER_MODE = 'sketchpad-default-eraser-mode';
 
 async function onActivate(plugin: ReactRNPlugin) {
   console.log('[Sketchpad] Plugin activating...');
@@ -38,6 +40,33 @@ async function onActivate(plugin: ReactRNPlugin) {
       { key: '8', label: 'Inside Flashcard - Renders within the flashcard itself', value: 'flashcard' },
       { key: '9', label: 'Rem Popup Right - Shows in rem reference popup (right)', value: 'rem-popup-right' },
       { key: '10', label: 'Rem Popup Start - Shows in rem reference popup (start)', value: 'rem-popup-start' },
+    ],
+  });
+
+  // Register eraser shortcut key setting
+  await plugin.settings.registerDropdownSetting({
+    id: SETTING_ERASER_KEY,
+    title: 'Hold-to-Erase Shortcut Key',
+    description: 'Hold this key while drawing to temporarily switch to eraser mode',
+    defaultValue: 'shift',
+    options: [
+      { key: '1', label: 'Shift', value: 'shift' },
+      { key: '2', label: 'Control', value: 'control' },
+      { key: '3', label: 'Alt/Option', value: 'alt' },
+      { key: '4', label: 'Meta/Command', value: 'meta' },
+      { key: '5', label: 'Disabled', value: 'none' },
+    ],
+  });
+
+  // Register default eraser mode setting
+  await plugin.settings.registerDropdownSetting({
+    id: SETTING_DEFAULT_ERASER_MODE,
+    title: 'Default Eraser Mode',
+    description: 'Choose how the eraser works by default',
+    defaultValue: 'pixel',
+    options: [
+      { key: '1', label: 'Pixel Erase - Erase parts of strokes', value: 'pixel' },
+      { key: '2', label: 'Stroke Erase - Remove entire strokes', value: 'stroke' },
     ],
   });
 

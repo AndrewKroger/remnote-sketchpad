@@ -7,9 +7,20 @@ interface Point {
   pressure: number;
 }
 
+interface Stroke {
+  points: Point[];
+  color: string;
+  lineWidth: number;
+}
+
 type Tool = 'pen' | 'eraser';
+type EraserMode = 'pixel' | 'stroke';
 
 const COLORS = ['#1a1a2e', '#e53e3e', '#dd6b20', '#d69e2e', '#38a169', '#3182ce', '#805ad5'];
+
+// Setting IDs
+const SETTING_ERASER_KEY = 'sketchpad-eraser-key';
+const SETTING_DEFAULT_ERASER_MODE = 'sketchpad-default-eraser-mode';
 
 const styles = {
   container: {
@@ -24,7 +35,6 @@ const styles = {
     WebkitUserSelect: 'none' as const,
     WebkitTouchCallout: 'none' as const,
   },
-  // Compact toolbar
   toolbar: {
     display: 'flex',
     alignItems: 'center',
@@ -60,7 +70,6 @@ const styles = {
     color: '#ffffff',
     borderColor: 'var(--rn-clr-background-accent, #3b82f6)',
   },
-  // Color slider/picker
   colorPicker: {
     flex: 1,
     display: 'flex',
@@ -82,7 +91,24 @@ const styles = {
     border: '2px solid var(--rn-clr-background-accent, #3b82f6)',
     transform: 'scale(1.15)',
   },
-  // Canvas area - full width
+  eraserModeBtn: {
+    padding: '4px 8px',
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: 'var(--rn-clr-border-opaque, #e2e8f0)',
+    borderRadius: '4px',
+    cursor: 'pointer',
+    fontSize: '11px',
+    fontWeight: 500,
+    transition: 'all 0.15s ease',
+    backgroundColor: 'var(--rn-clr-background-secondary, #f1f5f9)',
+    color: 'var(--rn-clr-content-secondary, #475569)',
+  },
+  eraserModeBtnActive: {
+    backgroundColor: 'var(--rn-clr-background-accent, #3b82f6)',
+    color: '#ffffff',
+    borderColor: 'var(--rn-clr-background-accent, #3b82f6)',
+  },
   canvasWrapper: {
     flex: 1,
     display: 'flex',
@@ -98,7 +124,6 @@ const styles = {
     width: '100%',
     flex: 1,
   },
-  // Grid overlay
   gridOverlay: {
     position: 'absolute' as const,
     top: 0,
@@ -112,7 +137,6 @@ const styles = {
     `,
     backgroundSize: '20px 20px',
   },
-  // Hint image overlay
   hintOverlay: {
     position: 'absolute' as const,
     top: 0,
@@ -125,7 +149,6 @@ const styles = {
     backgroundPosition: 'center',
     backgroundRepeat: 'no-repeat',
   },
-  // Compact footer
   footer: {
     display: 'flex',
     justifyContent: 'space-between',
@@ -177,37 +200,99 @@ export const SketchpadWidget = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const lastPointRef = useRef<Point | null>(null);
-  const lastCardIdRef = useRef<string | null>(null);
+  const strokesRef = useRef<Stroke[]>([]);
+  const currentStrokeRef = useRef<Stroke | null>(null);
 
   const [tool, setTool] = useState<Tool>('pen');
+  const [eraserMode, setEraserMode] = useState<EraserMode>('pixel');
   const [color, setColor] = useState('#1a1a2e');
   const [isDrawing, setIsDrawing] = useState(false);
   const [showHint, setShowHint] = useState(false);
   const [hintImageUrl, setHintImageUrl] = useState<string | null>(null);
-
   const [currentRemId, setCurrentRemId] = useState<string | null>(null);
+  const [isHoldingEraserKey, setIsHoldingEraserKey] = useState(false);
+  
+  // Apple Pencil double-tap detection (screen double-tap with pen)
+  // Note: Hardware pencil barrel double-tap requires native iOS APIs not available in web
+  const lastPenTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
+  const DOUBLE_TAP_THRESHOLD = 300; // ms
+  const DOUBLE_TAP_DISTANCE = 20; // pixels
 
-  // Listen for card completion - clear canvas when user rates a card
+  // Load settings
+  const eraserKey = useRunAsync(
+    () => plugin.settings.getSetting<string>(SETTING_ERASER_KEY),
+    []
+  );
+  
+  const defaultEraserMode = useRunAsync(
+    () => plugin.settings.getSetting<string>(SETTING_DEFAULT_ERASER_MODE),
+    []
+  );
+
+  // Set default eraser mode from settings
+  useEffect(() => {
+    if (defaultEraserMode === 'stroke' || defaultEraserMode === 'pixel') {
+      setEraserMode(defaultEraserMode);
+    }
+  }, [defaultEraserMode]);
+
+  // Listen for eraser shortcut key
+  useEffect(() => {
+    if (!eraserKey || eraserKey === 'none') return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const keyMatches = 
+        (eraserKey === 'shift' && e.shiftKey) ||
+        (eraserKey === 'control' && e.ctrlKey) ||
+        (eraserKey === 'alt' && e.altKey) ||
+        (eraserKey === 'meta' && e.metaKey);
+      
+      if (keyMatches && !isHoldingEraserKey) {
+        setIsHoldingEraserKey(true);
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      const keyReleased = 
+        (eraserKey === 'shift' && !e.shiftKey) ||
+        (eraserKey === 'control' && !e.ctrlKey) ||
+        (eraserKey === 'alt' && !e.altKey) ||
+        (eraserKey === 'meta' && !e.metaKey);
+      
+      if (keyReleased && isHoldingEraserKey) {
+        setIsHoldingEraserKey(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [eraserKey, isHoldingEraserKey]);
+
+  // Determine active tool (pen or eraser based on tool state + shortcut key)
+  const activeTool = isHoldingEraserKey ? 'eraser' : tool;
+
+  // Listen for card completion
   useAPIEventListener(AppEvents.QueueCompleteCard, undefined, async () => {
-    console.log('[Sketchpad] Card completed, clearing canvas');
     clearCanvasNow();
+    strokesRef.current = [];
     setShowHint(false);
     setHintImageUrl(null);
     
-    // Update to new card's remId after a short delay (card changes after event)
     setTimeout(async () => {
       const card = await plugin.queue.getCurrentCard();
       setCurrentRemId(card?.remId || null);
     }, 100);
   });
 
-  // Get current card's remId on mount and when entering queue
   useAPIEventListener(AppEvents.QueueEnter, undefined, async () => {
     const card = await plugin.queue.getCurrentCard();
     setCurrentRemId(card?.remId || null);
   });
 
-  // Initial load of current card
   useEffect(() => {
     const loadCurrentCard = async () => {
       const card = await plugin.queue.getCurrentCard();
@@ -216,7 +301,6 @@ export const SketchpadWidget = () => {
     loadCurrentCard();
   }, [plugin]);
 
-  // Direct clear function that doesn't depend on state
   const clearCanvasNow = useCallback(() => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
@@ -231,7 +315,40 @@ export const SketchpadWidget = () => {
     ctx.fillRect(0, 0, width, height);
   }, []);
 
-  // Load hint image from back of card
+  const redrawStrokes = useCallback(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!ctx || !canvas) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const width = canvas.width / dpr;
+    const height = canvas.height / dpr;
+
+    // Clear canvas
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+
+    // Redraw all strokes
+    for (const stroke of strokesRef.current) {
+      if (stroke.points.length < 2) continue;
+      
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.strokeStyle = stroke.color;
+      ctx.lineWidth = stroke.lineWidth;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      
+      ctx.beginPath();
+      ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+      for (let i = 1; i < stroke.points.length; i++) {
+        ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
+      }
+      ctx.stroke();
+    }
+  }, []);
+
+  // Load hint image
   useEffect(() => {
     const loadHintImage = async () => {
       if (!currentRemId) {
@@ -246,17 +363,13 @@ export const SketchpadWidget = () => {
           return;
         }
 
-        // Find image in backText
         for (const item of rem.backText) {
           if (typeof item === 'object' && item.i === 'i' && item.url) {
             let url = item.url;
-            
-            // Convert LOCAL_FILE paths to S3 URLs
             if (url.startsWith('%LOCAL_FILE%')) {
               const fileId = url.replace('%LOCAL_FILE%', '');
               url = `https://remnote-user-data.s3.amazonaws.com/${fileId}`;
             }
-            
             setHintImageUrl(url);
             return;
           }
@@ -293,6 +406,9 @@ export const SketchpadWidget = () => {
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(0, 0, width, height);
       }
+      
+      // Redraw existing strokes after resize
+      redrawStrokes();
     };
 
     setTimeout(setupCanvas, 100);
@@ -303,21 +419,12 @@ export const SketchpadWidget = () => {
     resizeObserver.observe(wrapper);
 
     return () => resizeObserver.disconnect();
-  }, []);
+  }, [redrawStrokes]);
 
   const clearCanvas = useCallback(() => {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext('2d');
-    if (!ctx || !canvas) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    const width = canvas.width / dpr;
-    const height = canvas.height / dpr;
-
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, width, height);
-  }, []);
+    clearCanvasNow();
+    strokesRef.current = [];
+  }, [clearCanvasNow]);
 
   const getPoint = useCallback((e: React.PointerEvent<HTMLCanvasElement>): Point => {
     const canvas = canvasRef.current!;
@@ -329,7 +436,20 @@ export const SketchpadWidget = () => {
     };
   }, []);
 
-  const drawLine = useCallback((from: Point, to: Point) => {
+  // Check if a point is near a stroke (for stroke erasing)
+  const isPointNearStroke = useCallback((point: Point, stroke: Stroke, threshold: number = 15): boolean => {
+    for (const strokePoint of stroke.points) {
+      const dx = point.x - strokePoint.x;
+      const dy = point.y - strokePoint.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      if (distance < threshold) {
+        return true;
+      }
+    }
+    return false;
+  }, []);
+
+  const drawLine = useCallback((from: Point, to: Point, currentTool: Tool) => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
     if (!ctx) return;
@@ -340,38 +460,88 @@ export const SketchpadWidget = () => {
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    if (tool === 'eraser') {
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.lineWidth = 20;
+    if (currentTool === 'eraser') {
+      if (eraserMode === 'stroke') {
+        // Check for stroke intersection and remove whole strokes
+        const strokesRemoved = strokesRef.current.filter(stroke => !isPointNearStroke(to, stroke));
+        if (strokesRemoved.length !== strokesRef.current.length) {
+          strokesRef.current = strokesRemoved;
+          redrawStrokes();
+        }
+      } else {
+        // Pixel erase
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.lineWidth = 20;
+        ctx.stroke();
+      }
     } else {
       ctx.globalCompositeOperation = 'source-over';
       ctx.strokeStyle = color;
       ctx.lineWidth = 2 + to.pressure * 4;
+      ctx.stroke();
     }
-
-    ctx.stroke();
-  }, [tool, color]);
+  }, [color, eraserMode, isPointNearStroke, redrawStrokes]);
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     e.preventDefault();
+    e.stopPropagation();
+    
     const canvas = canvasRef.current;
     if (!canvas) return;
+
+    // Apple Pencil screen double-tap detection (quick double-tap in same area toggles tool)
+    if (e.pointerType === 'pen') {
+      const now = Date.now();
+      const point = getPoint(e);
+      
+      if (lastPenTapRef.current) {
+        const timeDiff = now - lastPenTapRef.current.time;
+        const dx = point.x - lastPenTapRef.current.x;
+        const dy = point.y - lastPenTapRef.current.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        if (timeDiff < DOUBLE_TAP_THRESHOLD && distance < DOUBLE_TAP_DISTANCE) {
+          // Double tap detected - toggle between pen and eraser
+          setTool(prev => prev === 'pen' ? 'eraser' : 'pen');
+          lastPenTapRef.current = null; // Reset to prevent triple-tap
+          return; // Don't start drawing on double-tap
+        }
+      }
+      lastPenTapRef.current = { time: now, x: point.x, y: point.y };
+    }
 
     canvas.setPointerCapture(e.pointerId);
     const point = getPoint(e);
     lastPointRef.current = point;
     setIsDrawing(true);
-    drawLine(point, point);
-  }, [getPoint, drawLine]);
+
+    // Start new stroke if using pen
+    if (activeTool === 'pen') {
+      currentStrokeRef.current = {
+        points: [point],
+        color: color,
+        lineWidth: 2 + point.pressure * 4,
+      };
+    }
+
+    drawLine(point, point, activeTool);
+  }, [getPoint, drawLine, activeTool, color]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!isDrawing || !lastPointRef.current) return;
     e.preventDefault();
+    e.stopPropagation();
 
     const point = getPoint(e);
-    drawLine(lastPointRef.current, point);
+    drawLine(lastPointRef.current, point, activeTool);
+    
+    // Add point to current stroke
+    if (activeTool === 'pen' && currentStrokeRef.current) {
+      currentStrokeRef.current.points.push(point);
+    }
+    
     lastPointRef.current = point;
-  }, [isDrawing, getPoint, drawLine]);
+  }, [isDrawing, getPoint, drawLine, activeTool]);
 
   const handlePointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -382,8 +552,28 @@ export const SketchpadWidget = () => {
         // Ignore
       }
     }
+    
+    // Save completed stroke
+    if (activeTool === 'pen' && currentStrokeRef.current && currentStrokeRef.current.points.length > 0) {
+      strokesRef.current.push(currentStrokeRef.current);
+      currentStrokeRef.current = null;
+    }
+    
     setIsDrawing(false);
     lastPointRef.current = null;
+  }, [activeTool]);
+
+  // Prevent context menu (iOS text selection menu)
+  const handleContextMenu = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    return false;
+  }, []);
+
+  // Prevent touch callout
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    // Don't prevent default for touch drawing, just stop propagation
+    e.stopPropagation();
   }, []);
 
   const saveSketch = useCallback(async () => {
@@ -423,14 +613,18 @@ export const SketchpadWidget = () => {
   }, [plugin, clearCanvas, currentRemId]);
 
   return (
-    <div style={styles.container}>
-      {/* Compact toolbar */}
+    <div 
+      style={styles.container}
+      onContextMenu={handleContextMenu}
+      onTouchStart={handleTouchStart}
+    >
+      {/* Toolbar */}
       <div style={styles.toolbar}>
         <div style={styles.toolButtons}>
           <button
             style={{
               ...styles.toolBtn,
-              ...(tool === 'pen' ? styles.toolBtnActive : {}),
+              ...(tool === 'pen' && !isHoldingEraserKey ? styles.toolBtnActive : {}),
             }}
             onClick={() => setTool('pen')}
           >
@@ -439,30 +633,61 @@ export const SketchpadWidget = () => {
           <button
             style={{
               ...styles.toolBtn,
-              ...(tool === 'eraser' ? styles.toolBtnActive : {}),
+              ...(tool === 'eraser' || isHoldingEraserKey ? styles.toolBtnActive : {}),
             }}
             onClick={() => setTool('eraser')}
           >
             🧹
           </button>
         </div>
+        
+        {/* Show color palette for pen, eraser mode buttons for eraser */}
         <div style={styles.colorPicker}>
-          {COLORS.map((c) => (
-            <div
-              key={c}
-              style={{
-                ...styles.colorSwatch,
-                backgroundColor: c,
-                ...(color === c ? styles.colorSwatchActive : {}),
-              }}
-              onClick={() => setColor(c)}
-            />
-          ))}
+          {tool === 'eraser' || isHoldingEraserKey ? (
+            // Eraser mode buttons
+            <>
+              <button
+                style={{
+                  ...styles.eraserModeBtn,
+                  ...(eraserMode === 'pixel' ? styles.eraserModeBtnActive : {}),
+                }}
+                onClick={() => setEraserMode('pixel')}
+              >
+                Pixel
+              </button>
+              <button
+                style={{
+                  ...styles.eraserModeBtn,
+                  ...(eraserMode === 'stroke' ? styles.eraserModeBtnActive : {}),
+                }}
+                onClick={() => setEraserMode('stroke')}
+              >
+                Stroke
+              </button>
+            </>
+          ) : (
+            // Color palette
+            COLORS.map((c) => (
+              <div
+                key={c}
+                style={{
+                  ...styles.colorSwatch,
+                  backgroundColor: c,
+                  ...(color === c ? styles.colorSwatchActive : {}),
+                }}
+                onClick={() => setColor(c)}
+              />
+            ))
+          )}
         </div>
       </div>
 
-      {/* Canvas area with grid and hint */}
-      <div ref={wrapperRef} style={styles.canvasWrapper}>
+      {/* Canvas area */}
+      <div 
+        ref={wrapperRef} 
+        style={styles.canvasWrapper}
+        onContextMenu={handleContextMenu}
+      >
         <div style={styles.gridOverlay} />
         {showHint && hintImageUrl && (
           <div
@@ -480,10 +705,11 @@ export const SketchpadWidget = () => {
           onPointerUp={handlePointerUp}
           onPointerLeave={handlePointerUp}
           onPointerCancel={handlePointerUp}
+          onContextMenu={handleContextMenu}
         />
       </div>
 
-      {/* Compact footer - Save left, Hint middle, Clear right */}
+      {/* Footer */}
       <div style={styles.footer}>
         <button
           style={{ ...styles.footerBtn, ...styles.saveBtn }}
