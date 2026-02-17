@@ -252,10 +252,47 @@ export const SketchpadWidget = () => {
   const [isHoldingEraserKey, setIsHoldingEraserKey] = useState(false);
   const [canvasDimensions, setCanvasDimensions] = useState({ width: 0, height: 0 });
   const [gestureDetected, setGestureDetected] = useState<GestureType>(null);
+  const [gestureMode, setGestureMode] = useState(false);
+  const [showGestureZone, setShowGestureZone] = useState(false);
   
   // Track recent strokes for gesture detection (last 2 strokes within gesture zone)
   const gestureStrokesRef = useRef<Stroke[]>([]);
   const gestureTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const gestureZoneTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Show gesture zone for 5 seconds when gesture mode is enabled
+  useEffect(() => {
+    if (gestureMode) {
+      setShowGestureZone(true);
+      // Clear any existing timeout
+      if (gestureZoneTimeoutRef.current) {
+        clearTimeout(gestureZoneTimeoutRef.current);
+      }
+      // Hide after 5 seconds
+      gestureZoneTimeoutRef.current = setTimeout(() => {
+        setShowGestureZone(false);
+        gestureZoneTimeoutRef.current = null;
+      }, 5000);
+    } else {
+      setShowGestureZone(false);
+      if (gestureZoneTimeoutRef.current) {
+        clearTimeout(gestureZoneTimeoutRef.current);
+        gestureZoneTimeoutRef.current = null;
+      }
+    }
+    
+    return () => {
+      if (gestureZoneTimeoutRef.current) {
+        clearTimeout(gestureZoneTimeoutRef.current);
+      }
+    };
+  }, [gestureMode]);
+
+  // Toggle gesture mode handler
+  const toggleGestureMode = useCallback(() => {
+    setGestureMode(prev => !prev);
+    gestureStrokesRef.current = [];
+  }, []);
 
   // Calculate gesture zone bounds
   const getGestureZone = useCallback(() => {
@@ -512,7 +549,7 @@ export const SketchpadWidget = () => {
     setGestureDetected(gestureType);
     
     // Clear after showing feedback
-    setTimeout(() => setGestureDetected(null), 1000);
+    setTimeout(() => setGestureDetected(null), 800);
     
     try {
       const currentCard = await plugin.queue.getCurrentCard();
@@ -526,6 +563,8 @@ export const SketchpadWidget = () => {
           // Good - recalled with effort
           await currentCard.updateCardRepetitionStatus(QueueInteractionScore.GOOD);
           await plugin.app.toast('✓ Good!');
+          // Advance to next card
+          await plugin.queue.removeCurrentCardFromQueue(false);
           clearCanvasNow();
           strokesRef.current = [];
           gestureStrokesRef.current = [];
@@ -534,6 +573,8 @@ export const SketchpadWidget = () => {
           // Again - wrong
           await currentCard.updateCardRepetitionStatus(QueueInteractionScore.AGAIN);
           await plugin.app.toast('✗ Again');
+          // Advance to next card (add to back of queue for retry)
+          await plugin.queue.removeCurrentCardFromQueue(true);
           clearCanvasNow();
           strokesRef.current = [];
           gestureStrokesRef.current = [];
@@ -544,9 +585,9 @@ export const SketchpadWidget = () => {
           if (rem) {
             await rem.setEnablePractice(false);
             await plugin.app.toast('═ Card disabled');
-            // Move to next card
-            await currentCard.updateCardRepetitionStatus(QueueInteractionScore.GOOD);
           }
+          // Advance to next card (don't add to back stack)
+          await plugin.queue.removeCurrentCardFromQueue(false);
           clearCanvasNow();
           strokesRef.current = [];
           gestureStrokesRef.current = [];
@@ -888,8 +929,8 @@ export const SketchpadWidget = () => {
       strokesRef.current.push(completedStroke);
       currentStrokeRef.current = null;
       
-      // Check if stroke is in gesture zone
-      if (isStrokeInGestureZone(completedStroke)) {
+      // Only check for gestures when gesture mode is enabled
+      if (gestureMode && isStrokeInGestureZone(completedStroke)) {
         // Add to gesture strokes
         gestureStrokesRef.current.push(completedStroke);
         
@@ -919,7 +960,7 @@ export const SketchpadWidget = () => {
           }
           gestureTimeoutRef.current = null;
         }, 400);
-      } else {
+      } else if (gestureMode) {
         // Stroke outside gesture zone - clear gesture tracking
         gestureStrokesRef.current = [];
       }
@@ -1083,6 +1124,19 @@ export const SketchpadWidget = () => {
               />
             ))
           )}
+          
+          {/* Gesture mode toggle */}
+          <button
+            style={{
+              ...styles.eraserModeBtn,
+              marginLeft: '8px',
+              ...(gestureMode ? styles.eraserModeBtnActive : {}),
+            }}
+            onClick={toggleGestureMode}
+            title="Toggle gesture mode (✓ Good, ✗ Again, ═ Disable)"
+          >
+            👆
+          </button>
         </div>
       </div>
 
@@ -1102,8 +1156,8 @@ export const SketchpadWidget = () => {
           />
         )}
         
-        {/* Gesture zone indicator */}
-        {canvasDimensions.width > 0 && (
+        {/* Gesture zone indicator - only show for 5 seconds after enabling gesture mode */}
+        {showGestureZone && canvasDimensions.width > 0 && (
           <div
             style={{
               ...styles.gestureZone,
