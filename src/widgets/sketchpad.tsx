@@ -1,4 +1,4 @@
-import { usePlugin, renderWidget, useRunAsync, useAPIEventListener, AppEvents } from '@remnote/plugin-sdk';
+import { usePlugin, renderWidget, useRunAsync, useAPIEventListener, AppEvents, QueueInteractionScore } from '@remnote/plugin-sdk';
 import { useRef, useState, useEffect, useCallback } from 'react';
 
 interface Point {
@@ -15,8 +15,19 @@ interface Stroke {
 
 type Tool = 'pen' | 'eraser';
 type EraserMode = 'pixel' | 'stroke';
+type GestureType = 'checkmark' | 'cross' | 'double-line' | null;
+
+interface GestureResult {
+  type: GestureType;
+  confidence: number;
+}
 
 const COLORS = ['#1a1a2e', '#e53e3e', '#dd6b20', '#d69e2e', '#38a169', '#3182ce', '#805ad5'];
+
+// Gesture detection constants
+const GESTURE_ZONE_RATIO = 0.5; // Center 50% of canvas
+const MIN_GESTURE_SIZE = 80; // Minimum size in pixels for a gesture
+const CONFIDENCE_THRESHOLD = 0.80; // 80% confidence required
 
 // Setting IDs
 const SETTING_ERASER_KEY = 'sketchpad-eraser-key';
@@ -149,6 +160,34 @@ const styles = {
     backgroundPosition: 'center',
     backgroundRepeat: 'no-repeat',
   },
+  gestureZone: {
+    position: 'absolute' as const,
+    border: '2px dashed rgba(59, 130, 246, 0.3)',
+    borderRadius: '12px',
+    pointerEvents: 'none' as const,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gestureZoneLabel: {
+    fontSize: '10px',
+    color: 'rgba(59, 130, 246, 0.4)',
+    textAlign: 'center' as const,
+    fontWeight: 500,
+    padding: '4px 8px',
+    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+    borderRadius: '4px',
+  },
+  gestureFeedback: {
+    position: 'absolute' as const,
+    top: '50%',
+    left: '50%',
+    transform: 'translate(-50%, -50%)',
+    fontSize: '72px',
+    pointerEvents: 'none' as const,
+    animation: 'gesturePopIn 0.3s ease-out',
+    zIndex: 100,
+  },
   footer: {
     display: 'flex',
     justifyContent: 'space-between',
@@ -211,6 +250,312 @@ export const SketchpadWidget = () => {
   const [hintImageUrl, setHintImageUrl] = useState<string | null>(null);
   const [currentRemId, setCurrentRemId] = useState<string | null>(null);
   const [isHoldingEraserKey, setIsHoldingEraserKey] = useState(false);
+  const [canvasDimensions, setCanvasDimensions] = useState({ width: 0, height: 0 });
+  const [gestureDetected, setGestureDetected] = useState<GestureType>(null);
+  
+  // Track recent strokes for gesture detection (last 2 strokes within gesture zone)
+  const gestureStrokesRef = useRef<Stroke[]>([]);
+  const gestureTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Calculate gesture zone bounds
+  const getGestureZone = useCallback(() => {
+    const { width, height } = canvasDimensions;
+    const zoneWidth = width * GESTURE_ZONE_RATIO;
+    const zoneHeight = height * GESTURE_ZONE_RATIO;
+    return {
+      left: (width - zoneWidth) / 2,
+      top: (height - zoneHeight) / 2,
+      right: (width + zoneWidth) / 2,
+      bottom: (height + zoneHeight) / 2,
+      width: zoneWidth,
+      height: zoneHeight,
+    };
+  }, [canvasDimensions]);
+
+  // Check if a stroke is within the gesture zone
+  const isStrokeInGestureZone = useCallback((stroke: Stroke): boolean => {
+    const zone = getGestureZone();
+    if (stroke.points.length < 2) return false;
+    
+    // Check if majority of points are in the zone
+    let pointsInZone = 0;
+    for (const point of stroke.points) {
+      if (point.x >= zone.left && point.x <= zone.right &&
+          point.y >= zone.top && point.y <= zone.bottom) {
+        pointsInZone++;
+      }
+    }
+    return pointsInZone / stroke.points.length >= 0.7; // 70% of points must be in zone
+  }, [getGestureZone]);
+
+  // Get stroke bounding box and size
+  const getStrokeBounds = useCallback((stroke: Stroke) => {
+    if (stroke.points.length === 0) return { minX: 0, maxX: 0, minY: 0, maxY: 0, width: 0, height: 0 };
+    
+    let minX = stroke.points[0].x, maxX = stroke.points[0].x;
+    let minY = stroke.points[0].y, maxY = stroke.points[0].y;
+    
+    for (const point of stroke.points) {
+      minX = Math.min(minX, point.x);
+      maxX = Math.max(maxX, point.x);
+      minY = Math.min(minY, point.y);
+      maxY = Math.max(maxY, point.y);
+    }
+    
+    return { minX, maxX, minY, maxY, width: maxX - minX, height: maxY - minY };
+  }, []);
+
+  // Detect checkmark gesture (✓) - down-right then up-right, or V shape
+  const detectCheckmark = useCallback((stroke: Stroke): number => {
+    if (stroke.points.length < 5) return 0;
+    
+    const bounds = getStrokeBounds(stroke);
+    const size = Math.max(bounds.width, bounds.height);
+    if (size < MIN_GESTURE_SIZE) return 0;
+    
+    // Find the lowest point (vertex of checkmark)
+    let lowestIdx = 0;
+    let lowestY = stroke.points[0].y;
+    for (let i = 1; i < stroke.points.length; i++) {
+      if (stroke.points[i].y > lowestY) {
+        lowestY = stroke.points[i].y;
+        lowestIdx = i;
+      }
+    }
+    
+    // Vertex should be roughly in the middle-ish of the stroke
+    const vertexRatio = lowestIdx / stroke.points.length;
+    if (vertexRatio < 0.2 || vertexRatio > 0.6) return 0;
+    
+    // Check that stroke goes down to vertex then up
+    const start = stroke.points[0];
+    const vertex = stroke.points[lowestIdx];
+    const end = stroke.points[stroke.points.length - 1];
+    
+    // First part should go down-right
+    const firstPartGoesDown = vertex.y > start.y;
+    // Second part should go up-right
+    const secondPartGoesUp = end.y < vertex.y;
+    const endsHigher = end.y < start.y || Math.abs(end.y - start.y) < bounds.height * 0.3;
+    const endsToRight = end.x > start.x;
+    
+    if (firstPartGoesDown && secondPartGoesUp && endsToRight) {
+      // Calculate confidence based on shape quality
+      const downAngle = Math.atan2(vertex.y - start.y, vertex.x - start.x);
+      const upAngle = Math.atan2(end.y - vertex.y, end.x - vertex.x);
+      
+      // Ideal checkmark: down angle ~45-90°, up angle ~-30 to -60°
+      const downScore = 1 - Math.abs(downAngle - Math.PI / 3) / (Math.PI / 2);
+      const upScore = 1 - Math.abs(upAngle + Math.PI / 4) / (Math.PI / 2);
+      
+      return Math.min(1, (downScore + upScore) / 2 + 0.3);
+    }
+    
+    return 0;
+  }, [getStrokeBounds]);
+
+  // Detect X cross gesture - single stroke with direction change or two crossing strokes
+  const detectCross = useCallback((strokes: Stroke[]): number => {
+    // Single stroke X detection
+    if (strokes.length === 1) {
+      const stroke = strokes[0];
+      if (stroke.points.length < 5) return 0;
+      
+      const bounds = getStrokeBounds(stroke);
+      const size = Math.max(bounds.width, bounds.height);
+      if (size < MIN_GESTURE_SIZE) return 0;
+      
+      // Look for direction change (zigzag pattern)
+      const midIdx = Math.floor(stroke.points.length / 2);
+      const start = stroke.points[0];
+      const mid = stroke.points[midIdx];
+      const end = stroke.points[stroke.points.length - 1];
+      
+      // X pattern: diagonal one way, then diagonal the other
+      const firstDx = mid.x - start.x;
+      const firstDy = mid.y - start.y;
+      const secondDx = end.x - mid.x;
+      const secondDy = end.y - mid.y;
+      
+      // Check for opposite vertical directions (zigzag)
+      if ((firstDy > 0 && secondDy < 0) || (firstDy < 0 && secondDy > 0)) {
+        const aspectRatio = bounds.width / bounds.height;
+        if (aspectRatio > 0.5 && aspectRatio < 2) {
+          return 0.85;
+        }
+      }
+    }
+    
+    // Two stroke X detection
+    if (strokes.length === 2) {
+      const bounds1 = getStrokeBounds(strokes[0]);
+      const bounds2 = getStrokeBounds(strokes[1]);
+      
+      const size1 = Math.max(bounds1.width, bounds1.height);
+      const size2 = Math.max(bounds2.width, bounds2.height);
+      if (size1 < MIN_GESTURE_SIZE * 0.6 || size2 < MIN_GESTURE_SIZE * 0.6) return 0;
+      
+      // Check if strokes are diagonal and cross
+      const s1Start = strokes[0].points[0];
+      const s1End = strokes[0].points[strokes[0].points.length - 1];
+      const s2Start = strokes[1].points[0];
+      const s2End = strokes[1].points[strokes[1].points.length - 1];
+      
+      // Both strokes should be diagonal
+      const s1Diagonal = Math.abs(s1End.x - s1Start.x) > 30 && Math.abs(s1End.y - s1Start.y) > 30;
+      const s2Diagonal = Math.abs(s2End.x - s2Start.x) > 30 && Math.abs(s2End.y - s2Start.y) > 30;
+      
+      // Check opposite directions
+      const s1GoesDownRight = (s1End.x - s1Start.x) * (s1End.y - s1Start.y) > 0;
+      const s2GoesDownRight = (s2End.x - s2Start.x) * (s2End.y - s2Start.y) > 0;
+      
+      if (s1Diagonal && s2Diagonal && s1GoesDownRight !== s2GoesDownRight) {
+        // Check if they overlap/cross
+        const centerDist = Math.sqrt(
+          Math.pow((bounds1.minX + bounds1.width/2) - (bounds2.minX + bounds2.width/2), 2) +
+          Math.pow((bounds1.minY + bounds1.height/2) - (bounds2.minY + bounds2.height/2), 2)
+        );
+        const avgSize = (Math.max(bounds1.width, bounds1.height) + Math.max(bounds2.width, bounds2.height)) / 2;
+        
+        if (centerDist < avgSize * 0.5) {
+          return 0.9;
+        }
+      }
+    }
+    
+    return 0;
+  }, [getStrokeBounds]);
+
+  // Detect double horizontal line gesture (═) for disable card
+  const detectDoubleLine = useCallback((strokes: Stroke[]): number => {
+    if (strokes.length !== 2) return 0;
+    
+    const bounds1 = getStrokeBounds(strokes[0]);
+    const bounds2 = getStrokeBounds(strokes[1]);
+    
+    // Both strokes should be primarily horizontal
+    const isHorizontal1 = bounds1.width > bounds1.height * 2 && bounds1.width > MIN_GESTURE_SIZE * 0.6;
+    const isHorizontal2 = bounds2.width > bounds2.height * 2 && bounds2.width > MIN_GESTURE_SIZE * 0.6;
+    
+    if (!isHorizontal1 || !isHorizontal2) return 0;
+    
+    // Strokes should be roughly parallel (similar Y position, different)
+    const y1 = (bounds1.minY + bounds1.maxY) / 2;
+    const y2 = (bounds2.minY + bounds2.maxY) / 2;
+    const yDiff = Math.abs(y1 - y2);
+    
+    // They should be separate but not too far apart
+    const avgHeight = (bounds1.height + bounds2.height) / 2;
+    if (yDiff < avgHeight * 0.5 || yDiff > MIN_GESTURE_SIZE) return 0;
+    
+    // Check horizontal overlap
+    const overlapLeft = Math.max(bounds1.minX, bounds2.minX);
+    const overlapRight = Math.min(bounds1.maxX, bounds2.maxX);
+    const overlap = overlapRight - overlapLeft;
+    const avgWidth = (bounds1.width + bounds2.width) / 2;
+    
+    if (overlap > avgWidth * 0.5) {
+      return 0.9;
+    }
+    
+    return 0;
+  }, [getStrokeBounds]);
+
+  // Main gesture detection function
+  const detectGesture = useCallback((strokes: Stroke[]): GestureResult => {
+    if (strokes.length === 0) return { type: null, confidence: 0 };
+    
+    // Try checkmark (single stroke)
+    if (strokes.length === 1) {
+      const checkmarkConf = detectCheckmark(strokes[0]);
+      if (checkmarkConf >= CONFIDENCE_THRESHOLD) {
+        return { type: 'checkmark', confidence: checkmarkConf };
+      }
+    }
+    
+    // Try cross (single or double stroke)
+    const crossConf = detectCross(strokes);
+    if (crossConf >= CONFIDENCE_THRESHOLD) {
+      return { type: 'cross', confidence: crossConf };
+    }
+    
+    // Try double line (two strokes)
+    if (strokes.length === 2) {
+      const doubleLineConf = detectDoubleLine(strokes);
+      if (doubleLineConf >= CONFIDENCE_THRESHOLD) {
+        return { type: 'double-line', confidence: doubleLineConf };
+      }
+    }
+    
+    return { type: null, confidence: 0 };
+  }, [detectCheckmark, detectCross, detectDoubleLine]);
+
+  // Clear canvas helper (needed by executeGesture)
+  const clearCanvasNow = useCallback(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!ctx || !canvas) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const width = canvas.width / dpr;
+    const height = canvas.height / dpr;
+
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+  }, []);
+
+  // Execute gesture action
+  const executeGesture = useCallback(async (gestureType: GestureType) => {
+    if (!gestureType) return;
+    
+    setGestureDetected(gestureType);
+    
+    // Clear after showing feedback
+    setTimeout(() => setGestureDetected(null), 1000);
+    
+    try {
+      const currentCard = await plugin.queue.getCurrentCard();
+      if (!currentCard) {
+        await plugin.app.toast('No card in queue');
+        return;
+      }
+
+      switch (gestureType) {
+        case 'checkmark':
+          // Good - recalled with effort
+          await currentCard.updateCardRepetitionStatus(QueueInteractionScore.GOOD);
+          await plugin.app.toast('✓ Good!');
+          clearCanvasNow();
+          strokesRef.current = [];
+          gestureStrokesRef.current = [];
+          break;
+        case 'cross':
+          // Again - wrong
+          await currentCard.updateCardRepetitionStatus(QueueInteractionScore.AGAIN);
+          await plugin.app.toast('✗ Again');
+          clearCanvasNow();
+          strokesRef.current = [];
+          gestureStrokesRef.current = [];
+          break;
+        case 'double-line':
+          // Disable card
+          const rem = await plugin.rem.findOne(currentCard.remId);
+          if (rem) {
+            await rem.setEnablePractice(false);
+            await plugin.app.toast('═ Card disabled');
+            // Move to next card
+            await currentCard.updateCardRepetitionStatus(QueueInteractionScore.GOOD);
+          }
+          clearCanvasNow();
+          strokesRef.current = [];
+          gestureStrokesRef.current = [];
+          break;
+      }
+    } catch (error) {
+      console.error('[Sketchpad] Gesture action error:', error);
+    }
+  }, [plugin, clearCanvasNow]);
 
   // Load settings
   const eraserKey = useRunAsync(
@@ -294,20 +639,6 @@ export const SketchpadWidget = () => {
     };
     loadCurrentCard();
   }, [plugin]);
-
-  const clearCanvasNow = useCallback(() => {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext('2d');
-    if (!ctx || !canvas) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    const width = canvas.width / dpr;
-    const height = canvas.height / dpr;
-
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, width, height);
-  }, []);
 
   const redrawStrokes = useCallback(() => {
     const canvas = canvasRef.current;
@@ -393,6 +724,9 @@ export const SketchpadWidget = () => {
       canvas.style.height = `${height}px`;
       canvas.width = width * dpr;
       canvas.height = height * dpr;
+      
+      // Update dimensions for gesture zone calculation
+      setCanvasDimensions({ width, height });
 
       const ctx = canvas.getContext('2d');
       if (ctx) {
@@ -418,7 +752,21 @@ export const SketchpadWidget = () => {
   const clearCanvas = useCallback(() => {
     clearCanvasNow();
     strokesRef.current = [];
+    gestureStrokesRef.current = [];
+    if (gestureTimeoutRef.current) {
+      clearTimeout(gestureTimeoutRef.current);
+      gestureTimeoutRef.current = null;
+    }
   }, [clearCanvasNow]);
+
+  // Cleanup gesture timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (gestureTimeoutRef.current) {
+        clearTimeout(gestureTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const getPoint = useCallback((e: React.PointerEvent<HTMLCanvasElement>): Point => {
     const canvas = canvasRef.current!;
@@ -536,13 +884,50 @@ export const SketchpadWidget = () => {
     
     // Save completed stroke
     if (activeTool === 'pen' && currentStrokeRef.current && currentStrokeRef.current.points.length > 0) {
-      strokesRef.current.push(currentStrokeRef.current);
+      const completedStroke = currentStrokeRef.current;
+      strokesRef.current.push(completedStroke);
       currentStrokeRef.current = null;
+      
+      // Check if stroke is in gesture zone
+      if (isStrokeInGestureZone(completedStroke)) {
+        // Add to gesture strokes
+        gestureStrokesRef.current.push(completedStroke);
+        
+        // Keep only last 2 strokes for gesture detection
+        if (gestureStrokesRef.current.length > 2) {
+          gestureStrokesRef.current = gestureStrokesRef.current.slice(-2);
+        }
+        
+        // Clear any existing timeout
+        if (gestureTimeoutRef.current) {
+          clearTimeout(gestureTimeoutRef.current);
+        }
+        
+        // Check for gesture after a short delay (to allow for multi-stroke gestures)
+        gestureTimeoutRef.current = setTimeout(() => {
+          const result = detectGesture(gestureStrokesRef.current);
+          if (result.type && result.confidence >= CONFIDENCE_THRESHOLD) {
+            // Remove gesture strokes from regular strokes
+            for (const gs of gestureStrokesRef.current) {
+              const idx = strokesRef.current.indexOf(gs);
+              if (idx > -1) {
+                strokesRef.current.splice(idx, 1);
+              }
+            }
+            redrawStrokes();
+            executeGesture(result.type);
+          }
+          gestureTimeoutRef.current = null;
+        }, 400);
+      } else {
+        // Stroke outside gesture zone - clear gesture tracking
+        gestureStrokesRef.current = [];
+      }
     }
     
     setIsDrawing(false);
     lastPointRef.current = null;
-  }, [activeTool]);
+  }, [activeTool, isStrokeInGestureZone, detectGesture, executeGesture, redrawStrokes]);
 
   // Prevent context menu (iOS text selection menu)
   const handleContextMenu = useCallback((e: React.MouseEvent | React.TouchEvent | Event) => {
@@ -716,6 +1101,34 @@ export const SketchpadWidget = () => {
             }}
           />
         )}
+        
+        {/* Gesture zone indicator */}
+        {canvasDimensions.width > 0 && (
+          <div
+            style={{
+              ...styles.gestureZone,
+              left: `${(100 - GESTURE_ZONE_RATIO * 100) / 2}%`,
+              top: `${(100 - GESTURE_ZONE_RATIO * 100) / 2}%`,
+              width: `${GESTURE_ZONE_RATIO * 100}%`,
+              height: `${GESTURE_ZONE_RATIO * 100}%`,
+            }}
+          >
+            <span style={styles.gestureZoneLabel}>
+              Gesture Zone<br/>
+              ✓ Good &nbsp; ✗ Again &nbsp; ═ Disable
+            </span>
+          </div>
+        )}
+        
+        {/* Gesture feedback */}
+        {gestureDetected && (
+          <div style={styles.gestureFeedback}>
+            {gestureDetected === 'checkmark' && '✓'}
+            {gestureDetected === 'cross' && '✗'}
+            {gestureDetected === 'double-line' && '═'}
+          </div>
+        )}
+        
         <canvas
           ref={canvasRef}
           style={styles.canvas}

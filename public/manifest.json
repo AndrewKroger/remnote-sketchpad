@@ -6,12 +6,12 @@
   "repoUrl": "https://github.com/AndrewKroger/remnote-sketchpad",
   "version": {
     "major": 0,
-    "minor": 2,
-    "patch": 1
+    "minor": 3,
+    "patch": 0
   },
   "theme": [],
   "enableOnMobile": true,
-  "description": "A sketchpad widget for drawing and saving sketches to Rems. Optimized for iPad with Apple Pencil support, hold-to-erase shortcuts, and stroke/pixel eraser modes.",
+  "description": "A sketchpad for drawing sketches. iPad optimized with Apple Pencil, gesture recognition (✓ Good, ✗ Again, ═ Disable), eraser shortcuts.",
   "requestNative": false,
   "requiredScopes": [
     {
